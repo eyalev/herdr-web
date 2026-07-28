@@ -148,6 +148,15 @@ sidebar_start_collapsed = true
 sidebar_collapsed_mode = "hidden"
 ```
 
+**Can't scroll up in a Claude Code pane?** Its `fullscreen` renderer keeps
+the conversation on the alternate screen and nothing in terminal scrollback,
+so `pane.read {source: "recent"}` has nothing above the current screen to
+return. `/tui default` switches to the classic renderer, which keeps the
+conversation in scrollback and makes scrolling work; `/tui fullscreen`
+switches back. Note that this is a global Claude Code setting: it takes
+effect immediately in every running session, not only the one you ran it in.
+A plain shell pane is unaffected.
+
 ## Status
 
 Early but real — built and verified against herdr 0.7.5 (protocol 17) with
