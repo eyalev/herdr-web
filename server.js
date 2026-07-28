@@ -37,6 +37,7 @@ const state = {
   eventSub: null,          // herdr subscription handle
   paneIds: [],             // pane ids covered by current subscription
   refreshTimer: null,
+  eventsDegraded: false,   // herdr refused or dropped the subscription
 };
 
 function broadcast(msg) {
@@ -50,7 +51,7 @@ async function refreshSnapshot(reason) {
   try {
     const res = await herdr.request('session.snapshot');
     state.snapshot = res.snapshot;
-    broadcast({ type: 'sessions', sessions: sessionList() });
+    broadcast({ type: 'sessions', sessions: sessionList(), eventsDegraded: state.eventsDegraded });
     const ids = (state.snapshot.panes || []).map((p) => p.pane_id).sort();
     if (ids.join(',') !== state.paneIds.join(',')) resubscribe(ids);
   } catch (e) {
@@ -125,8 +126,24 @@ function resubscribe(paneIds) {
         herdr.ensureServer().then(() => refreshSnapshot('resubscribe')).catch((e) => jlog('error', 'herdr-recover-failed', { error: e.message }));
       }, 1000);
     },
+    onReady() {
+      jlog('info', 'subscribed', { panes: paneIds.length });
+      if (state.eventsDegraded) {
+        state.eventsDegraded = false;
+        broadcast({ type: 'degraded', degraded: false });
+      }
+    },
+    onError(e) {
+      // Not cleared: paneIds still match the snapshot, so refreshSnapshot
+      // won't resubscribe. Retrying a rejected subscription would loop the
+      // same rejection forever while looking like a benign reconnect.
+      jlog('error', 'subscribe-failed', { code: e.code, message: e.message });
+      if (!state.eventsDegraded) {
+        state.eventsDegraded = true;
+        broadcast({ type: 'degraded', degraded: true, code: e.code });
+      }
+    },
   });
-  jlog('info', 'subscribed', { panes: paneIds.length });
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +323,7 @@ wss.on('connection', (ws) => {
   state.webClients.add(ws);
   let watched = null;
   jlog('info', 'ws-open', { clients: state.webClients.size });
-  ws.send(JSON.stringify({ type: 'sessions', sessions: sessionList() }));
+  ws.send(JSON.stringify({ type: 'sessions', sessions: sessionList(), eventsDegraded: state.eventsDegraded }));
 
   ws.on('message', async (raw) => {
     let msg;
