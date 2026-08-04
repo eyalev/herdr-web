@@ -65,6 +65,7 @@
   }
   #conn { width: 8px; height: 8px; border-radius: 50%; background: #f85149; flex: none; margin-left: 2px; }
   #conn.ok { background: var(--st-working); animation: none; }
+  #conn.degraded { background: var(--st-blocked); animation: pulse 1s ease-in-out infinite; }
   #attn {
     flex: none; align-items: center; gap: 5px; padding: 6px 10px; cursor: pointer;
     border-radius: 8px; background: var(--bg3); border: 1px solid var(--st-done);
@@ -394,6 +395,7 @@ function colorOf(c) {
 const $ = (id) => document.getElementById(id);
 const term = $('term'), tabsEl = $('tabs'), histBadge = $('livekey'), emptyEl = $('empty');
 let ws = null, wsOk = false;
+let eventsDegraded = false, degradedCode = null; // herdr stopped feeding us events
 let sessions = [];          // from server
 let activePane = localStorage.getItem('herdr-web-pane') || null;
 let liveRows = [];          // last live screen rows
@@ -959,12 +961,31 @@ function selectPane(paneId) {
 // ---------------------------------------------------------------------------
 function send(obj) { if (wsOk) ws.send(JSON.stringify(obj)); }
 
+// Three states, not two: connected-and-fed, connected-but-herdr-stopped-
+// sending-events, and disconnected. The middle one used to look identical
+// to the first while status dots quietly went stale.
+function setConnDot() {
+  const el = $('conn');
+  if (!wsOk) {
+    el.classList.remove('ok', 'degraded');
+    el.title = 'disconnected';
+  } else if (eventsDegraded) {
+    el.classList.remove('ok');
+    el.classList.add('degraded');
+    el.title = `live updates are down${degradedCode ? ` (${degradedCode})` : ''} — status dots and alerts are stale`;
+  } else {
+    el.classList.remove('degraded');
+    el.classList.add('ok');
+    el.title = 'connected';
+  }
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
     wsOk = true;
-    $('conn').classList.add('ok');
+    setConnDot();
     if (activePane) {
       send({ type: 'watch', pane: activePane });
       send({ type: 'scrollback', pane: activePane, lines: 500 }); // prefetch
@@ -973,7 +994,7 @@ function connect() {
   };
   ws.onclose = () => {
     wsOk = false;
-    $('conn').classList.remove('ok');
+    setConnDot();
     setTimeout(connect, 1500);
   };
   ws.onmessage = (ev) => {
@@ -981,12 +1002,19 @@ function connect() {
     switch (m.type) {
       case 'sessions': {
         sessions = m.sessions;
+        // Absent on an older server; absent must not read as "healthy".
+        if (typeof m.eventsDegraded === 'boolean') { eventsDegraded = m.eventsDegraded; setConnDot(); }
         const known = paneEntries().map((e) => e.p.pane_id);
         if (activePane && !known.includes(activePane)) activePane = null;
         if (!activePane && known.length) selectPane(known[0]);
         else renderTabs();
         break;
       }
+      case 'degraded':
+        eventsDegraded = !!m.degraded;
+        degradedCode = m.code || null;
+        setConnDot();
+        break;
       case 'screen':
         if (m.pane === activePane) onScreen(m.rows);
         break;
